@@ -1,0 +1,14 @@
+# Render Blueprint for the VOIDBLOOM co-op server.
+# Put this folder's files at the top of a GitHub repo, then in Render:
+#   New + -> Blueprint -> pick the repo -> Apply.
+# (Or make the Web Service by hand with the same settings; see README.md.)
+services:
+  - type: web
+    name: voidbloom-server
+    runtime: node
+    plan: free
+    region: singapore        # closest Render region to Australia
+    buildCommand: npm install
+    startCommand: node index.js
+    healthCheckPath: /health
+    autoDeployTrigger: commit

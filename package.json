@@ -1,0 +1,20 @@
+{
+  "name": "voidbloom-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "VOIDBLOOM co-op server (Colyseus) - THE UNDERVAULT",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@colyseus/core": "0.18.14",
+    "@colyseus/schema": "5.0.33",
+    "@colyseus/ws-transport": "0.18.2",
+    "express": "5.1.0"
+  }
+}
