@@ -24,10 +24,14 @@ for the free plan.
 
 1. Go to <https://github.com/new>, name the repository `voidbloom-server`, and click
    **Create repository**.
-2. On the empty repo page, click **uploading an existing file**.
-3. Drag in everything in this folder: `index.js`, `package.json`, `package-lock.json`,
-   `render.yaml`, `.gitignore` and `README.md`. Don't upload a `node_modules` folder if
-   you have one. Click **Commit changes**.
+2. Double-click **UPDATE SERVER.bat** in this folder. The first time, it asks for the
+   address of that repository (it guesses, so usually just press Enter), then sends
+   everything up. Every time after that it is one double-click and a few words about
+   what changed.
+
+   *If you'd rather do it by hand:* on the empty repo page click **uploading an existing
+   file**, drag in `index.js`, `package.json`, `package-lock.json`, `render.yaml`,
+   `.gitignore` and `README.md` — not `node_modules` — and click **Commit changes**.
 
 ### 2. Make the service on Render
 
@@ -74,20 +78,50 @@ then reload. That copy of the game uses your server until you run
 
 ## What the free plan does
 
-- **It sleeps.** After 15 minutes with nobody connected, Render stops the server. The
-  next player to open MULTIPLAYER wakes it up, which takes about a minute. That's what the
-  loading bar in the game shows, and it gets better at guessing the wait each time.
-  Hovering over the MULTIPLAYER card for a moment starts the wake-up early.
+- **It would sleep, but it doesn't.** Render stops a free service after 15 idle minutes,
+  and starting it again takes the better part of a minute — long enough for the gateway in
+  front of it to give up and hand the player **error 524** instead of a lobby. So the
+  server pings its own `/health` every 10 minutes (`AWAKE_MS`, see below). Any inbound
+  request resets the idle timer, so it never sleeps and there is no cold start left to
+  time out. The loading bar in the game still exists for the times it does have to start
+  from cold — a deploy, a crash, a Render restart.
+- **Hours:** 750 free hours a month. A month is at most 744 hours, so a server that is up
+  the whole time still fits. **This only holds for one free service** — if you ever add a
+  second one they share the 750 hours, and then one of them has to be allowed to sleep.
 - **It stays awake while people play.** Messages from connected players count as
-  activity, so a lobby or a run never gets cut off by the sleep timer.
-- **Hours:** 750 free hours a month. A month is at most 744 hours, so one service never
-  runs out.
+  activity too, so a lobby or a run is never cut off by the sleep timer.
 - **Traffic:** the server compresses what it sends (`perMessageDeflate`), and a busy
   four-player run costs it about 20–30 kB/s — roughly **15 MB for a whole run**. Two
   players cost about a third of that. A free workspace includes **5 GB of outbound traffic
   a month**, so that is somewhere north of 300 four-player runs. If a month ever goes over,
   Render suspends the service until the next month rather than charging anything; the
   Billing page shows how much you have used.
+
+## Sending a change up
+
+**UPDATE SERVER.bat** — double-click it. It:
+
+1. checks the files first: `index.js` is a real server and parses, `package.json` is valid
+   JSON with a start script, and the protocol matches the one in `VOIDBLOOM.html`. A typo
+   caught here saves three minutes of Render's build time.
+2. shows you which files changed and asks what to call the change,
+3. commits and pushes it to GitHub, which is what tells Render to redeploy,
+4. **waits and proves it worked.** `/health` reports `sig`, a fingerprint of the exact
+   `index.js` the server is running. The script works out the same fingerprint from the
+   file on your disk and watches until the live server reports it. "It deployed" stops
+   being something you hope.
+
+If the push fails — no internet, GitHub asking for a sign-in — nothing is lost: the commit
+sits here and the next run sends it.
+
+### Settings you can change on Render
+
+Render → your service → **Environment**. Both are optional.
+
+| | |
+|---|---|
+| `AWAKE_MS` | how often the server pings itself, in milliseconds. Default `600000` (10 min), minimum 30000. Set it higher to let the server sleep again. |
+| `PORT` | Render sets this itself. Don't. |
 
 ## Changing the netcode later
 
@@ -122,6 +156,6 @@ ever host the server somewhere else, add that address to `connect-src` in
 
 | | |
 |---|---|
-| `GET /health` | `{ ok: 'voidbloom', protocol, up, rooms, players }`. The game polls this while the server wakes up. |
+| `GET /health` | `{ ok: 'voidbloom', protocol, sig, up, rooms, players, cpu, mem }`. The game polls this while the server wakes up; `sig` fingerprints the running `index.js`, and `UPDATE SERVER.bat` uses it to prove a deploy landed. |
 | `GET /` | a one-line "awake" message, so opening the address in a browser shows something |
 | WebSocket | Colyseus matchmaking and the `undervault` room |

@@ -18,13 +18,28 @@
 
    Endpoints
      GET /health   -> { ok: 'voidbloom', ... }   the game polls this while
-                      the server wakes up, to drive its loading bar
+                      the server wakes up, to drive its loading bar.
+                      'sig' is a fingerprint of this very file, so a
+                      deploy can be proved rather than assumed
      GET /         -> a one-line text page, so opening the URL in a
                       browser shows something friendly
      ws            -> Colyseus matchmaking + rooms (room name: 'undervault')
    ===================================================================== */
 import { Server, Room, matchMaker } from '@colyseus/core';
 import { WebSocketTransport } from '@colyseus/ws-transport';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
+
+/* A fingerprint of this file, so "did my change actually go live?" has an
+   answer instead of a guess. Carriage returns are stripped first: Windows
+   and Linux must agree on the number even if git rewrites line endings.
+   If anything here fails it must not take the server down with it. */
+let SIG = 'unknown';
+try {
+  const self = readFileSync(fileURLToPath(import.meta.url), 'utf8').replace(/\r/g, '');
+  SIG = createHash('sha1').update(self).digest('hex').slice(0, 8);
+} catch (e) { /* nothing here is worth crashing over */ }
 
 const PORT = Number(process.env.PORT || 2567);
 // the game refuses to play with a server that speaks a different protocol
@@ -62,6 +77,32 @@ setInterval(() => {
 
 // a promise nobody caught should never take the whole lobby down with it
 process.on('unhandledRejection', (e) => console.error('[voidbloom] unhandled rejection:', e && e.message || e));
+
+/* ------------------------------------------------------------------ awake
+   Render's free plan stops a service after fifteen idle minutes, and starting
+   it again takes the better part of a minute -- long enough for the gateway in
+   front of it to give up and hand the player a 524 instead of a lobby. The
+   game knows how to wait through that, but a player on an older build does
+   not, and neither does anyone's patience.
+
+   Any inbound request resets that idle timer, so the server keeps itself up by
+   asking itself how it is every ten minutes. 750 free instance-hours a month
+   against a month's 744: staying up costs nothing. RENDER_EXTERNAL_URL is set
+   by Render, so this does nothing at all when run locally. */
+const SELF = (process.env.RENDER_EXTERNAL_URL || '').replace(/\/+$/, '');
+const AWAKE_MS = Math.max(30000, Number(process.env.AWAKE_MS) || 10 * 60 * 1000);   // tunable from Render's dashboard
+if (SELF) {
+  let missed = 0;
+  setInterval(() => {
+    const ctl = new AbortController();
+    const cut = setTimeout(() => ctl.abort(), 20000);
+    fetch(SELF + '/health?awake=1', { signal: ctl.signal })
+      .then((r) => { clearTimeout(cut); if (r.ok) missed = 0; else throw new Error('HTTP ' + r.status); })
+      // worth a line in the log: if these pile up the instance is sleeping
+      // again and players are back to waiting through cold starts
+      .catch((e) => { clearTimeout(cut); if (++missed <= 3) console.warn('[voidbloom] keep-awake ping failed (' + missed + '):', e && e.message || e); });
+  }, AWAKE_MS).unref();
+}
 
 class UndervaultRoom extends Room {
   maxClients = MAX_PLAYERS;
@@ -303,7 +344,7 @@ const server = new Server({
     });
     app.get('/health', (req, res) => {
       res.setHeader('Cache-Control', 'no-store');
-      res.json({ ok: 'voidbloom', protocol: PROTOCOL, up: Math.round((Date.now() - STARTED) / 1000), rooms: liveRooms, players: livePlayers,
+      res.json({ ok: 'voidbloom', protocol: PROTOCOL, sig: SIG, up: Math.round((Date.now() - STARTED) / 1000), rooms: liveRooms, players: livePlayers,
         cpu: cpuPct, mem: Math.round(process.memoryUsage().rss / 1048576) });
     });
     app.get('/', (req, res) => {
@@ -317,5 +358,6 @@ const server = new Server({
 server.define('undervault', UndervaultRoom).filterBy(['public']);
 
 server.listen(PORT).then(() => {
-  console.log('[voidbloom] co-op server listening on :' + PORT + ' (' + PROTOCOL + ')');
+  console.log('[voidbloom] co-op server listening on :' + PORT + ' (' + PROTOCOL + ', build ' + SIG + ')');
+  console.log('[voidbloom] keep-awake: ' + (SELF ? 'on, every ' + (AWAKE_MS / 60000) + ' min via ' + SELF : 'off (no RENDER_EXTERNAL_URL - running locally)'));
 });
