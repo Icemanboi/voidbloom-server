@@ -31,7 +31,7 @@ const PORT = Number(process.env.PORT || 2567);
 const PROTOCOL = 'undervault-1';
 const STARTED = Date.now();
 const MAX_PLAYERS = 4;
-const HOST_GRACE_S = 8;          // a host that drops gets this long to come back
+const HOST_GRACE_S = 5;          // a host that drops gets this long to come back
 const RECONNECT_S = 25;          // anyone else gets this long
 const DIFFS = ['normal', 'hard', 'nightmare'];
 const SKIN_RE = /^[a-z0-9_]{1,24}$/;
@@ -49,6 +49,19 @@ function cleanName(v) {
 }
 
 let liveRooms = 0, livePlayers = 0;
+
+/* How hard this little box is working. A free instance gets a tenth of a CPU;
+   if `cpu` sits near 10% of a core the relay is being throttled, and players
+   feel that as lag. /health reports it so it can be checked from anywhere. */
+let cpuPct = 0, lastCpu = process.cpuUsage(), lastCpuT = Date.now();
+setInterval(() => {
+  const c = process.cpuUsage(lastCpu), dt = Date.now() - lastCpuT;
+  lastCpu = process.cpuUsage(); lastCpuT = Date.now();
+  if (dt > 0) cpuPct = Math.round((c.user + c.system) / 10 / dt);
+}, 5000).unref();
+
+// a promise nobody caught should never take the whole lobby down with it
+process.on('unhandledRejection', (e) => console.error('[voidbloom] unhandled rejection:', e && e.message || e));
 
 class UndervaultRoom extends Room {
   maxClients = MAX_PLAYERS;
@@ -265,14 +278,15 @@ const server = new Server({
   // the transport's own default (4 KB) would drop the host mid-fight
   transport: new WebSocketTransport({
     pingInterval: 5000, pingMaxRetries: 4, maxPayload: 512 * 1024,
-    /* Compress what goes out. The free plan counts outbound bytes, and a
-       host's world packets are very like the one before them, so deflate
-       with the window kept between messages roughly halves the traffic for
-       a little CPU. Small packets (under 128 bytes) are sent as they are. */
+/* Compress what goes out. The free plan counts outbound bytes, and a
+       host's world packets are very like the one before them, so deflate with
+       the window kept between messages roughly halves the traffic. Level 1 and
+       a 512-byte floor keep the CPU cost small -- a free instance only gets a
+       tenth of a core, and a stalled relay is felt by every player as lag. */
     perMessageDeflate: {
-      zlibDeflateOptions: { level: 3, memLevel: 7 },
+      zlibDeflateOptions: { level: 1, memLevel: 7 },
       serverMaxWindowBits: 13,
-      threshold: 128,
+      threshold: 512,
       concurrencyLimit: 8
     }
   }),
@@ -289,10 +303,12 @@ const server = new Server({
     });
     app.get('/health', (req, res) => {
       res.setHeader('Cache-Control', 'no-store');
-      res.json({ ok: 'voidbloom', protocol: PROTOCOL, up: Math.round((Date.now() - STARTED) / 1000), rooms: liveRooms, players: livePlayers });
+      res.json({ ok: 'voidbloom', protocol: PROTOCOL, up: Math.round((Date.now() - STARTED) / 1000), rooms: liveRooms, players: livePlayers,
+        cpu: cpuPct, mem: Math.round(process.memoryUsage().rss / 1048576) });
     });
     app.get('/', (req, res) => {
-      res.type('text/plain').send('VOIDBLOOM co-op server is awake. Rooms: ' + liveRooms + ', players: ' + livePlayers + '.');
+      res.type('text/plain').send('VOIDBLOOM co-op server is awake. Rooms: ' + liveRooms + ', players: ' + livePlayers +
+        '. Up ' + Math.round((Date.now() - STARTED) / 60000) + ' min, cpu ' + cpuPct + '% of a core, memory ' + Math.round(process.memoryUsage().rss / 1048576) + ' MB.');
     });
   }
 });
